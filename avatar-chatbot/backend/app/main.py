@@ -51,12 +51,11 @@ app.add_middleware(SecurityHeaders)
 
 
 # ------------------------------------------------------------------ Startup / Seeding
-@app.on_event("startup")
-async def seed_sample_docs():
-    """Pre-warms the embedding model and seeds sample calculus PDF if document database is empty."""
-    # Pre-warm sentence-transformers in background so first chat query responds immediately
-    asyncio.create_task(asyncio.to_thread(lambda: rag_engine.embeddings))
+async def _deferred_seed():
+    """Runs in the background AFTER Uvicorn binds to the port so cloud port scanners (Render/Railway) never time out."""
+    await asyncio.sleep(3)
     try:
+        await asyncio.to_thread(lambda: rag_engine.embeddings)
         docs = await asyncio.to_thread(db.list_documents)
         if not docs:
             sample_pdf = Path(settings.upload_dir) / "sample_calculus.pdf"
@@ -85,6 +84,12 @@ async def seed_sample_docs():
                 log.info("Sample textbook indexed successfully.")
     except Exception as e:
         log.warning("Could not auto-seed sample document: %s", e)
+
+
+@app.on_event("startup")
+async def seed_sample_docs():
+    """Schedules background embedding warm-up and sample PDF seeding without blocking port binding."""
+    asyncio.create_task(_deferred_seed())
 
 
 # ------------------------------------------------------------------ Configuration & Health
@@ -803,3 +808,14 @@ async def attention_ws_endpoint(ws: WebSocket):
 _dist = Path(__file__).resolve().parents[2] / "frontend" / "dist"
 if _dist.is_dir():
     app.mount("/", StaticFiles(directory=_dist, html=True), name="frontend")
+else:
+    @app.get("/")
+    async def root_status():
+        return {"ok": True, "service": "AI Tutor & Avatar Backend", "health": "/api/health"}
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    port = int(os.environ.get("PORT", settings.backend_port))
+    uvicorn.run("app.main:app", host="0.0.0.0", port=port)

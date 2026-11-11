@@ -29,27 +29,29 @@ except ImportError:
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-# Flexible imports for various LangChain layouts
-try:
-    from langchain_huggingface import HuggingFaceEmbeddings
-except ImportError:
-    try:
-        from langchain_community.embeddings import HuggingFaceEmbeddings
-    except ImportError:
-        HuggingFaceEmbeddings = None
-
-try:
-    from langchain_chroma import Chroma
-except ImportError:
-    try:
-        from langchain_community.vectorstores import Chroma
-    except ImportError:
-        Chroma = None
-
 from .config import settings
 
 logger = logging.getLogger("avatar-rag")
 logger.setLevel(logging.INFO)
+
+
+class OnnxMiniLMEmbeddings:
+    """Lightweight 384-dim all-MiniLM-L6-v2 embeddings via Chroma's ONNX runtime (no PyTorch required)."""
+
+    def __init__(self):
+        from chromadb.utils.embedding_functions import DefaultEmbeddingFunction
+
+        self._ef = DefaultEmbeddingFunction()
+
+    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        if not texts:
+            return []
+        res = self._ef(texts)
+        return [[float(x) for x in vec] for vec in res]
+
+    def embed_query(self, text: str) -> List[float]:
+        res = self._ef([text])
+        return [float(x) for x in res[0]]
 
 
 class RAGEngine:
@@ -73,19 +75,30 @@ class RAGEngine:
         with self._lock:
             if self._embeddings is None:
                 logger.info(f"Loading Embedding Model: {self.embedding_model_name}")
-                if HuggingFaceEmbeddings is not None:
-                    self._embeddings = HuggingFaceEmbeddings(
-                        model_name=self.embedding_model_name,
-                        model_kwargs={"device": "cpu"},
-                        encode_kwargs={"normalize_embeddings": True},
-                    )
+                use_onnx = bool(os.environ.get("RENDER") or os.environ.get("USE_ONNX_EMBEDDINGS"))
+                if not use_onnx:
+                    try:
+                        try:
+                            from langchain_huggingface import HuggingFaceEmbeddings
+                        except ImportError:
+                            from langchain_community.embeddings import HuggingFaceEmbeddings
+                        self._embeddings = HuggingFaceEmbeddings(
+                            model_name=self.embedding_model_name,
+                            model_kwargs={"device": "cpu"},
+                            encode_kwargs={"normalize_embeddings": True},
+                        )
+                    except Exception as e:
+                        logger.info(f"Falling back to lightweight ONNX all-MiniLM-L6-v2 embeddings: {e}")
+                        self._embeddings = OnnxMiniLMEmbeddings()
                 else:
-                    raise RuntimeError("HuggingFaceEmbeddings is not available in environment.")
+                    self._embeddings = OnnxMiniLMEmbeddings()
             return self._embeddings
 
     def get_vector_store(self, collection_name: str = "calculus_101") -> Any:
-        if Chroma is None:
-            raise RuntimeError("Chroma vector store is not available in environment.")
+        try:
+            from langchain_chroma import Chroma
+        except ImportError:
+            from langchain_community.vectorstores import Chroma
         with self._lock:
             if collection_name not in self._vector_stores:
                 self._vector_stores[collection_name] = Chroma(
