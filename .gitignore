@@ -1,0 +1,23 @@
+# Dependencies
+node_modules/
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Database and uploaded storage
+data/
+uploads/
+chroma_db/
+*.db
+*.sqlite3
+
+# Logs and environment secrets
+*.log
+.env
+
+# Build outputs
+avatar-chatbot/frontend/dist/
+
+# Distribution archives
+*.zip
