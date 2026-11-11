@@ -43,7 +43,7 @@ export default function App() {
     api
       .listCollections()
       .then((colls) => {
-        if (colls && colls.length) setCollections(colls);
+        if (Array.isArray(colls)) setCollections(colls);
       })
       .catch(() => {});
   }, []);
@@ -502,11 +502,11 @@ export default function App() {
             className={`tab-btn ${activeTab === "docs" ? "active" : ""}`}
             onClick={() => setActiveTab("docs")}
           >
-            📚 Knowledge Base
+            📚 Documents
           </button>
         </div>
 
-        {/* Main Grid Content: Combined (Avatar + Chat) + Knowledge Base */}
+        {/* Main Grid Content: Combined (Avatar + Chat) + Documents */}
         <div className={`content partitions-2 tab-${activeTab}`}>
 
           {/* COMBINED PARTITION: 3D AVATAR + INTERACTIVE CHAT */}
@@ -522,7 +522,7 @@ export default function App() {
                     onChange={(e) => setActiveCollection(e.target.value)}
                     className="coll-select"
                   >
-                    <option value="all">All Subjects</option>
+                    <option value="all">Choose Subjects</option>
                     {collections.map((c) => (
                       <option key={c} value={c}>{c}</option>
                     ))}

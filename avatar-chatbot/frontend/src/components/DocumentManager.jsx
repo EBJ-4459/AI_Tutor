@@ -51,11 +51,15 @@ export default function DocumentManager({
   const [customNotes, setCustomNotes] = useState("");
   const fileInputRef = useRef(null);
 
+  const creatingNewSubject = isNewSubject || collections.length === 0;
+
   useEffect(() => {
     if (activeCollection && activeCollection !== "all" && !isNewSubject) {
       setTargetCollection(activeCollection);
+    } else if (!targetCollection && collections.length > 0 && !isNewSubject) {
+      setTargetCollection(collections[0]);
     }
-  }, [activeCollection, isNewSubject]);
+  }, [activeCollection, collections, targetCollection, isNewSubject]);
 
   const fetchDocuments = async () => {
     try {
@@ -63,7 +67,7 @@ export default function DocumentManager({
       const docs = await api.listDocuments(activeCollection);
       setDocuments(docs);
       const colls = await api.listCollections();
-      if (colls && colls.length) setLocalCollections(colls);
+      setLocalCollections(colls || []);
       onCollectionsRefresh?.();
     } catch (err) {
       onNotification?.(`Could not load files: ${err.message}`);
@@ -83,7 +87,11 @@ export default function DocumentManager({
       onNotification?.("Please select a document file (.pdf, .txt, .md)");
       return;
     }
-    const chosenSubject = (isNewSubject ? newSubjectName : targetCollection).trim() || "calculus_101";
+    const chosenSubject = (creatingNewSubject ? newSubjectName : targetCollection).trim();
+    if (!chosenSubject) {
+      onNotification?.("Please enter a subject name.");
+      return;
+    }
     const formData = new FormData();
     formData.append("file", selectedFile);
     formData.append("collection", chosenSubject);
@@ -188,7 +196,7 @@ export default function DocumentManager({
       <div className="doc-header">
         <div>
           <div className="doc-title-row">
-            <h2>📚 Knowledge Base</h2>
+            <h2>📚 Documents</h2>
             <span className="badge-pill">{documents.length} {documents.length === 1 ? "file" : "files"}</span>
           </div>
           <p className="doc-subtitle">Upload textbooks and notes for avatar RAG retrieval</p>
@@ -202,7 +210,7 @@ export default function DocumentManager({
             onChange={(e) => onCollectionChange(e.target.value)}
             className="coll-select"
           >
-            <option value="all">All Subjects</option>
+            <option value="all">Choose Subjects</option>
             {collections.map((c) => (
               <option key={c} value={c}>{c}</option>
             ))}
@@ -235,36 +243,55 @@ export default function DocumentManager({
 
             <div className="form-grid">
               <div>
-                <label className="input-label">Subject</label>
-                <select
-                  value={isNewSubject ? "__new__" : (collections.includes(targetCollection) ? targetCollection : (collections[0] || "general"))}
-                  onChange={(e) => {
-                    if (e.target.value === "__new__") {
-                      setIsNewSubject(true);
-                      setNewSubjectName("");
-                    } else {
-                      setIsNewSubject(false);
-                      setTargetCollection(e.target.value);
-                    }
-                  }}
-                  className="text-input"
-                >
-                  {collections.map((c) => (
-                    <option key={c} value={c}>{c}</option>
-                  ))}
-                  <option value="__new__">+ New Subject...</option>
-                </select>
-                {isNewSubject && (
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                  <label className="input-label">Subject</label>
+                  {creatingNewSubject && collections.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setIsNewSubject(false)}
+                      style={{
+                        background: "none",
+                        border: "none",
+                        color: "var(--accent)",
+                        fontSize: "10.5px",
+                        fontWeight: 600,
+                        cursor: "pointer",
+                        padding: 0,
+                        marginBottom: "4px",
+                      }}
+                    >
+                      ▾ Existing
+                    </button>
+                  )}
+                </div>
+                {creatingNewSubject ? (
                   <input
                     type="text"
                     value={newSubjectName}
                     onChange={(e) => setNewSubjectName(e.target.value)}
-                    placeholder="Enter new subject name..."
+                    placeholder="Type new subject name..."
                     className="text-input"
-                    style={{ marginTop: "6px" }}
-                    autoFocus
                     required
                   />
+                ) : (
+                  <select
+                    value={collections.includes(targetCollection) ? targetCollection : (collections[0] || "")}
+                    onChange={(e) => {
+                      if (e.target.value === "__new__") {
+                        setIsNewSubject(true);
+                        setNewSubjectName("");
+                      } else {
+                        setIsNewSubject(false);
+                        setTargetCollection(e.target.value);
+                      }
+                    }}
+                    className="text-input"
+                  >
+                    {collections.map((c) => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                    <option value="__new__">+ New Subject...</option>
+                  </select>
                 )}
               </div>
               <div>
