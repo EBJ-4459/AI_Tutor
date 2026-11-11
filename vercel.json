@@ -1,0 +1,6 @@
+{
+  "buildCommand": "cd avatar-chatbot/frontend && npm install && npm run build",
+  "outputDirectory": "avatar-chatbot/frontend/dist",
+  "installCommand": "cd avatar-chatbot/frontend && npm install",
+  "framework": "vite"
+}

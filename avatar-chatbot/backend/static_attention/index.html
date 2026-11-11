@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Attention Checker HUD · Port 8001</title>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- MediaPipe Face Mesh & Camera Utils -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+
+  <style>
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: #0f172a; }
+    ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+    .pulse-danger {
+      box-shadow: 0 0 20px rgba(244, 63, 94, 0.7);
+      animation: pulse-border 1.2s infinite;
+    }
+    @keyframes pulse-border {
+      0%, 100% { border-color: rgba(244, 63, 94, 0.9); }
+      50% { border-color: rgba(244, 63, 94, 0.3); }
+    }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col font-sans">
+
+  <!-- Header -->
+  <header class="bg-slate-900/90 backdrop-blur border-b border-slate-800 px-6 py-4 flex items-center justify-between sticky top-0 z-50 shadow-xl">
+    <div class="flex items-center space-x-3">
+      <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-cyan-500 to-indigo-600 flex items-center justify-center font-bold text-xl text-white shadow-lg shadow-indigo-500/20">
+        👁️
+      </div>
+      <div>
+        <div class="flex items-center space-x-2">
+          <h1 class="text-lg font-bold text-white tracking-wide">
+            Visual Attention & Drowsiness Checker
+          </h1>
+          <span class="px-2 py-0.5 text-[11px] font-mono bg-indigo-950/80 border border-indigo-700/60 text-indigo-300 rounded-full font-bold">
+            Port 8001
+          </span>
+        </div>
+        <p class="text-xs text-slate-400">Head Pose Estimation (Yaw/Pitch/Roll) &bull; Eye Aspect Ratio (EAR) Telemetry</p>
+      </div>
+    </div>
+
+    <!-- Status Badges & Link to Main App -->
+    <div class="flex items-center space-x-3">
+      <div class="flex items-center space-x-2 bg-slate-950 px-3 py-1.5 rounded-xl border border-slate-800">
+        <span id="ws-status-dot" class="w-2.5 h-2.5 rounded-full bg-amber-500 animate-pulse"></span>
+        <span id="ws-status-text" class="text-xs font-mono text-slate-300">WS: Connecting</span>
+      </div>
+      <a href="http://localhost:5173" target="_blank"
+        class="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-xl text-xs font-semibold transition shadow-md shadow-indigo-600/30 flex items-center space-x-1.5">
+        <span>Open 3D Avatar Tutor (5173)</span>
+        <span>↗</span>
+      </a>
+    </div>
+  </header>
+
+  <!-- Main Content Grid -->
+  <main class="flex-1 max-w-7xl w-full mx-auto p-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
+
+    <!-- LEFT COLUMN: Live Camera Feed & Face Mesh Canvas (7 cols) -->
+    <div class="lg:col-span-7 space-y-5">
+      <div class="bg-slate-900/90 rounded-2xl border border-slate-800 p-5 shadow-2xl flex flex-col">
+        <div class="flex items-center justify-between mb-4">
+          <div class="flex items-center space-x-2">
+            <span class="text-sm font-semibold text-slate-200 uppercase tracking-wider">Live Vision Feed</span>
+            <span class="text-xs text-slate-500 font-mono" id="fps-counter">640x480</span>
+          </div>
+          <div class="flex items-center space-x-2">
+            <span id="attention-badge" class="px-3 py-1 rounded-full text-xs font-bold bg-emerald-950 border border-emerald-500/60 text-emerald-400">
+              Attentive
+            </span>
+          </div>
+        </div>
+
+        <!-- Video & Face Canvas Container -->
+        <div class="relative rounded-xl overflow-hidden bg-slate-950 border border-slate-800 aspect-video flex items-center justify-center shadow-inner" id="video-container">
+          <video id="webcam" class="w-full h-full object-cover transform -scale-x-100" playsinline></video>
+          <canvas id="face-canvas" class="absolute inset-0 w-full h-full pointer-events-none transform -scale-x-100"></canvas>
+
+          <div id="camera-overlay" class="absolute inset-0 bg-slate-950/85 flex flex-col items-center justify-center p-6 text-center">
+            <div class="w-16 h-16 rounded-2xl bg-indigo-950/60 border border-indigo-700/50 flex items-center justify-center text-3xl mb-3 shadow-inner">
+              📷
+            </div>
+            <p class="text-sm text-slate-200 font-medium">Camera Inactive</p>
+            <p class="text-xs text-slate-400 mt-1 max-w-xs">Click Enable to run real-time MediaPipe face mesh tracking, or test with the Simulation Deck below.</p>
+            <button id="start-cam-btn" class="mt-4 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold transition shadow-lg shadow-indigo-600/30 flex items-center space-x-2">
+              <span>Enable Webcam</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Camera Controls -->
+        <div class="mt-4 flex items-center justify-between pt-3 border-t border-slate-800/80">
+          <div class="flex items-center space-x-2 text-xs text-slate-400">
+            <span>Mesh Overlay:</span>
+            <button id="toggle-mesh-btn" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 rounded-lg text-slate-300 font-medium text-[11px] transition">
+              On
+            </button>
+          </div>
+          <p class="text-[11px] text-slate-500 font-mono" id="reason-display">Awaiting input...</p>
+        </div>
+      </div>
+
+      <!-- Simulation & Test Controls Card -->
+      <div class="bg-slate-900/90 rounded-2xl border border-slate-800 p-5 shadow-xl space-y-3">
+        <h3 class="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center space-x-2">
+          <span>🧪</span>
+          <span>Simulation & Testing Deck</span>
+        </h3>
+        <p class="text-xs text-slate-400">Instantly test how the system and 3D Avatar respond to different distraction triggers:</p>
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
+          <button id="sim-yaw-btn" class="px-3 py-2.5 bg-rose-950/80 hover:bg-rose-900/90 border border-rose-700/50 text-rose-300 rounded-xl text-xs font-semibold transition text-center shadow-md">
+            Simulate Look Away (Yaw 42°)
+          </button>
+          <button id="sim-drowsy-btn" class="px-3 py-2.5 bg-amber-950/80 hover:bg-amber-900/90 border border-amber-700/50 text-amber-300 rounded-xl text-xs font-semibold transition text-center shadow-md">
+            Simulate Drowsy (Eyes Closed 6s)
+          </button>
+          <button id="sim-normal-btn" class="px-3 py-2.5 bg-emerald-950/80 hover:bg-emerald-900/90 border border-emerald-700/50 text-emerald-300 rounded-xl text-xs font-semibold transition text-center shadow-md">
+            Reset to Attentive
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- RIGHT COLUMN: Real-Time Telemetry Meters & Event Log (5 cols) -->
+    <div class="lg:col-span-5 space-y-5">
+
+      <!-- Telemetry Meters Card -->
+      <div class="bg-slate-900/90 rounded-2xl border border-slate-800 p-5 shadow-xl space-y-5">
+        <h2 class="text-sm font-semibold text-slate-200 uppercase tracking-wider flex items-center space-x-2">
+          <span>📊</span>
+          <span>Real-time Attention Telemetry</span>
+        </h2>
+
+        <!-- Head Pose Yaw Meter -->
+        <div class="space-y-1.5">
+          <div class="flex justify-between items-center text-xs">
+            <span class="text-slate-400 font-medium">Head Yaw (Horizontal Angle)</span>
+            <span id="yaw-val" class="font-mono text-sm font-bold text-cyan-400">0.0°</span>
+          </div>
+          <div class="w-full bg-slate-950 h-3 rounded-full overflow-hidden border border-slate-800 relative shadow-inner">
+            <!-- Safe zone indicator (-30 to +30 deg is 25% to 75%) -->
+            <div class="absolute inset-y-0 left-[25%] right-[25%] bg-cyan-500/15 border-x border-cyan-400/40"></div>
+            <div id="yaw-bar" class="h-full bg-cyan-500 transition-all duration-150 rounded-full" style="width: 50%;"></div>
+          </div>
+          <div class="flex justify-between text-[10px] text-slate-500 font-mono">
+            <span class="text-rose-400 font-bold">&lt; -30° (Left)</span>
+            <span>0° (Center)</span>
+            <span class="text-rose-400 font-bold">&gt; +30° (Right)</span>
+          </div>
+        </div>
+
+        <!-- Head Pitch & Roll Indicators -->
+        <div class="grid grid-cols-2 gap-3 pt-1">
+          <div class="bg-slate-950/80 p-3 rounded-xl border border-slate-800">
+            <p class="text-[11px] text-slate-400 font-medium">Head Pitch (Vertical)</p>
+            <p id="pitch-val" class="text-sm font-mono font-bold text-slate-200 mt-0.5">0.0°</p>
+          </div>
+          <div class="bg-slate-950/80 p-3 rounded-xl border border-slate-800">
+            <p class="text-[11px] text-slate-400 font-medium">Head Roll (Tilt)</p>
+            <p id="roll-val" class="text-sm font-mono font-bold text-slate-200 mt-0.5">0.0°</p>
+          </div>
+        </div>
+
+        <!-- Eye Aspect Ratio (EAR) Meter -->
+        <div class="space-y-1.5 pt-2 border-t border-slate-800/80">
+          <div class="flex justify-between items-center text-xs">
+            <span class="text-slate-400 font-medium">Eye Aspect Ratio (EAR)</span>
+            <span id="ear-val" class="font-mono text-sm font-bold text-emerald-400">0.340</span>
+          </div>
+          <div class="w-full bg-slate-950 h-3 rounded-full overflow-hidden border border-slate-800 relative shadow-inner">
+            <!-- Drowsy cutoff (<0.21 = 42%) -->
+            <div class="absolute inset-y-0 left-0 w-[42%] bg-rose-500/20 border-r border-rose-500/50"></div>
+            <div id="ear-bar" class="h-full bg-emerald-500 transition-all duration-150 rounded-full" style="width: 68%;"></div>
+          </div>
+          <div class="flex justify-between text-[10px] text-slate-500 font-mono">
+            <span class="text-rose-400 font-bold">&lt; 0.21 (Closed)</span>
+            <span>0.30</span>
+            <span class="text-emerald-400 font-bold">0.50 (Open)</span>
+          </div>
+        </div>
+
+        <!-- Closed Eyes Timer -->
+        <div class="bg-slate-950/80 p-3.5 rounded-xl border border-slate-800 flex items-center justify-between">
+          <div class="flex items-center space-x-2.5">
+            <span class="text-base">⏱️</span>
+            <div>
+              <p class="text-xs text-slate-300 font-medium">Eyes Closed Duration</p>
+              <p class="text-[10px] text-slate-500">Flags drowsiness at 5.0s</p>
+            </div>
+          </div>
+          <span id="closed-time-val" class="font-mono text-sm font-bold text-slate-200">0.0s / 5.0s</span>
+        </div>
+
+      </div>
+
+      <!-- Live Distraction Event Log Card -->
+      <div class="bg-slate-900/90 rounded-2xl border border-slate-800 p-5 shadow-xl space-y-3">
+        <div class="flex items-center justify-between">
+          <h3 class="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center space-x-2">
+            <span>📜</span>
+            <span>Distraction & Alert Log</span>
+          </h3>
+          <span id="event-count" class="text-[10px] text-slate-500 font-mono">0 events</span>
+        </div>
+        <div id="event-log-container" class="space-y-2 max-h-48 overflow-y-auto pr-1">
+          <div class="p-2.5 bg-slate-950/70 border border-slate-800/80 rounded-xl text-xs text-slate-400 text-center font-mono">
+            Awaiting distraction triggers...
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+  </main>
+
+  <script>
+    const WS_URL = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/attention_stream?session_id=checker_${Math.random().toString(36).substring(2, 7)}`;
+    
+    // Elements
+    const wsStatusDot = document.getElementById("ws-status-dot");
+    const wsStatusText = document.getElementById("ws-status-text");
+    const attentionBadge = document.getElementById("attention-badge");
+    const yawVal = document.getElementById("yaw-val");
+    const yawBar = document.getElementById("yaw-bar");
+    const pitchVal = document.getElementById("pitch-val");
+    const rollVal = document.getElementById("roll-val");
+    const earVal = document.getElementById("ear-val");
+    const earBar = document.getElementById("ear-bar");
+    const closedTimeVal = document.getElementById("closed-time-val");
+    const reasonDisplay = document.getElementById("reason-display");
+    const eventLogContainer = document.getElementById("event-log-container");
+    const eventCount = document.getElementById("event-count");
+    const videoContainer = document.getElementById("video-container");
+
+    const webcam = document.getElementById("webcam");
+    const faceCanvas = document.getElementById("face-canvas");
+    const cameraOverlay = document.getElementById("camera-overlay");
+    const startCamBtn = document.getElementById("start-cam-btn");
+    const toggleMeshBtn = document.getElementById("toggle-mesh-btn");
+
+    let showMesh = true;
+    let ws = null;
+    let events = [];
+
+    // 1. WebSocket Setup
+    function initWebSocket() {
+      ws = new WebSocket(WS_URL);
+      ws.onopen = () => {
+        wsStatusDot.className = "w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse";
+        wsStatusText.innerText = "WS: Active";
+      };
+      ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        renderTelemetry(data);
+      };
+      ws.onclose = () => {
+        wsStatusDot.className = "w-2.5 h-2.5 rounded-full bg-rose-500";
+        wsStatusText.innerText = "WS: Reconnecting...";
+        setTimeout(initWebSocket, 2500);
+      };
+    }
+    initWebSocket();
+
+    // 2. Render Telemetry HUD
+    function renderTelemetry(data) {
+      if (!data || !data.metrics) return;
+      const m = data.metrics;
+      const isDistracted = data.is_distracted;
+
+      // Status badge
+      if (isDistracted) {
+        attentionBadge.className = "px-3 py-1 rounded-full text-xs font-bold bg-rose-950 border border-rose-500/80 text-rose-300 animate-pulse";
+        attentionBadge.innerText = "Distracted";
+        videoContainer.classList.add("pulse-danger");
+      } else {
+        attentionBadge.className = "px-3 py-1 rounded-full text-xs font-bold bg-emerald-950 border border-emerald-500/60 text-emerald-400";
+        attentionBadge.innerText = "Attentive";
+        videoContainer.classList.remove("pulse-danger");
+      }
+
+      reasonDisplay.innerText = data.reason || "Attentive";
+
+      // Yaw Angle (-60° to +60°)
+      const yaw = m.yaw_deg || 0;
+      yawVal.innerText = `${yaw > 0 ? '+' : ''}${yaw.toFixed(1)}°`;
+      const clampedYaw = Math.max(-60, Math.min(60, yaw));
+      const yawPercent = ((clampedYaw + 60) / 120) * 100;
+      yawBar.style.width = `${yawPercent}%`;
+      yawBar.className = Math.abs(yaw) > 30 ? "h-full bg-rose-500 transition-all duration-150 rounded-full" : "h-full bg-cyan-500 transition-all duration-150 rounded-full";
+
+      // Pitch & Roll
+      pitchVal.innerText = `${(m.pitch_deg || 0).toFixed(1)}°`;
+      rollVal.innerText = `${(m.roll_deg || 0).toFixed(1)}°`;
+
+      // EAR
+      const ear = m.ear || 0;
+      earVal.innerText = ear.toFixed(3);
+      const earPercent = Math.min(100, (ear / 0.5) * 100);
+      earBar.style.width = `${earPercent}%`;
+      earBar.className = ear < 0.21 ? "h-full bg-rose-500 transition-all duration-150 rounded-full" : "h-full bg-emerald-500 transition-all duration-150 rounded-full";
+
+      // Closed timer
+      const closedSec = m.eyes_closed_duration_sec || 0;
+      closedTimeVal.innerText = `${closedSec.toFixed(1)}s / 5.0s`;
+      closedTimeVal.className = closedSec >= 5.0 ? "font-mono text-sm font-bold text-rose-400 animate-pulse" : "font-mono text-sm font-bold text-slate-200";
+
+      // Append to event log if flagged
+      if (data.is_distracted || data.trigger_prompt_override) {
+        logEvent(data);
+      }
+    }
+
+    function logEvent(data) {
+      const now = new Date().toLocaleTimeString();
+      const existing = events[0];
+      if (existing && existing.reason === data.reason && Date.now() - existing.time < 3000) return;
+
+      events.unshift({ time: Date.now(), timeStr: now, ...data });
+      if (events.length > 25) events.pop();
+      eventCount.innerText = `${events.length} events`;
+
+      eventLogContainer.innerHTML = events.map(e => `
+        <div class="p-2.5 rounded-xl border ${e.is_distracted ? 'bg-rose-950/40 border-rose-800/60 text-rose-200' : 'bg-slate-950 border-slate-800 text-slate-300'} text-xs flex items-center justify-between">
+          <div>
+            <span class="font-bold ${e.is_distracted ? 'text-rose-400' : 'text-emerald-400'}">[${e.status}]</span>
+            <span class="text-slate-300 ml-1.5">${e.reason}</span>
+          </div>
+          <span class="text-[10px] font-mono text-slate-500">${e.timeStr}</span>
+        </div>
+      `).join("");
+    }
+
+    // 3. MediaPipe Face Mesh Webcam Integration
+    startCamBtn.onclick = async () => {
+      try {
+        cameraOverlay.classList.add("hidden");
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
+        webcam.srcObject = stream;
+        await webcam.play();
+
+        const canvasCtx = faceCanvas.getContext("2d");
+        faceCanvas.width = 640;
+        faceCanvas.height = 480;
+
+        const faceMesh = new FaceMesh({
+          locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
+        });
+        faceMesh.setOptions({
+          maxNumFaces: 1,
+          refineLandmarks: true,
+          minDetectionConfidence: 0.5,
+          minTrackingConfidence: 0.5
+        });
+
+        faceMesh.onResults((results) => {
+          canvasCtx.clearRect(0, 0, faceCanvas.width, faceCanvas.height);
+          if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+            const landmarks = results.multiFaceLandmarks[0];
+
+            // Send to Port 8001 WebSocket
+            if (ws && ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({ landmarks, width: 640, height: 480 }));
+            }
+
+            // Draw Wireframe Mesh
+            if (showMesh) {
+              canvasCtx.fillStyle = "rgba(56, 189, 248, 0.4)";
+              canvasCtx.strokeStyle = "rgba(99, 102, 241, 0.3)";
+              canvasCtx.lineWidth = 0.5;
+
+              // Draw key facial landmarks (nose, eyes, chin)
+              const keyPoints = [1, 152, 33, 263, 61, 291];
+              for (const idx of keyPoints) {
+                const pt = landmarks[idx];
+                canvasCtx.beginPath();
+                canvasCtx.arc(pt.x * 640, pt.y * 480, 2.5, 0, 2 * Math.PI);
+                canvasCtx.fillStyle = "#38bdf8";
+                canvasCtx.fill();
+              }
+            }
+          } else if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ no_face: true }));
+          }
+        });
+
+        const camera = new Camera(webcam, {
+          onFrame: async () => {
+            if (!document.hidden) {
+              await faceMesh.send({ image: webcam });
+            }
+          },
+          width: 640,
+          height: 480
+        });
+        camera.start();
+
+        // Web Worker keep-alive so tracking continues when switching to the Tutor tab
+        let isProcessingBgFrame = false;
+        try {
+          const workerBlob = new Blob([
+            "let timer = null; self.onmessage = function(e) { if (e.data === 'start') { timer = setInterval(() => self.postMessage('tick'), 250); } else if (e.data === 'stop') { clearInterval(timer); } };"
+          ], { type: "application/javascript" });
+          const workerUrl = URL.createObjectURL(workerBlob);
+          const bgWorker = new Worker(workerUrl);
+          bgWorker.onmessage = async () => {
+            if (document.hidden && webcam.readyState >= 2 && !isProcessingBgFrame) {
+              isProcessingBgFrame = true;
+              try {
+                await faceMesh.send({ image: webcam });
+              } catch (err) {
+                // ignore transient error
+              } finally {
+                isProcessingBgFrame = false;
+              }
+            }
+          };
+          bgWorker.postMessage("start");
+        } catch (workerErr) {
+          console.warn("Background worker setup:", workerErr);
+        }
+
+      } catch (err) {
+        alert("Camera access error: " + err.message);
+        cameraOverlay.classList.remove("hidden");
+      }
+    };
+
+    toggleMeshBtn.onclick = () => {
+      showMesh = !showMesh;
+      toggleMeshBtn.innerText = showMesh ? "On" : "Off";
+      toggleMeshBtn.className = showMesh
+        ? "px-2.5 py-1 bg-indigo-600 rounded-lg text-white font-medium text-[11px]"
+        : "px-2.5 py-1 bg-slate-800 rounded-lg text-slate-300 font-medium text-[11px]";
+    };
+
+    // 4. Simulation Buttons
+    document.getElementById("sim-yaw-btn").onclick = () => {
+      fetch("/api/simulate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "yaw" })
+      }).then(r => r.json()).then(renderTelemetry);
+    };
+
+    document.getElementById("sim-drowsy-btn").onclick = () => {
+      fetch("/api/simulate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "drowsy" })
+      }).then(r => r.json()).then(renderTelemetry);
+    };
+
+    document.getElementById("sim-normal-btn").onclick = () => {
+      fetch("/api/simulate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "normal" })
+      }).then(r => r.json()).then(renderTelemetry);
+    };
+  </script>
+</body>
+</html>
