@@ -4,6 +4,7 @@ import { attentionWsUrl, api } from "../lib/api.js";
 export default function BackgroundAttentionMonitor({
   enabled = true,
   onDistractionDetected,
+  onCameraStatusChange,
 }) {
   const [open, setOpen] = useState(false);
   const [status, setStatus] = useState("Attentive");
@@ -151,6 +152,7 @@ export default function BackgroundAttentionMonitor({
     }
     cameraActiveRef.current = false;
     setCameraActive(false);
+    onCameraStatusChange?.(false);
     setStatus("Attentive");
     setFocusScore(92);
     onDistractionRef.current?.({ is_distracted: false });
@@ -170,7 +172,9 @@ export default function BackgroundAttentionMonitor({
         video: { width: 480, height: 320, facingMode: "user" },
       });
       streamRef.current = stream;
+      cameraActiveRef.current = true;
       setCameraActive(true);
+      onCameraStatusChange?.(true);
 
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
@@ -210,18 +214,78 @@ export default function BackgroundAttentionMonitor({
               }
             }
 
-            if (wsRef.current?.readyState !== WebSocket.OPEN) return;
-            if (results.multiFaceLandmarks?.[0]) {
-              wsRef.current.send(
-                JSON.stringify({
-                  landmarks: results.multiFaceLandmarks[0],
-                  width: 480,
-                  height: 320,
-                })
-              );
-            } else {
-              wsRef.current.send(JSON.stringify({ no_face: true }));
+            if (wsRef.current?.readyState === WebSocket.OPEN) {
+              if (results.multiFaceLandmarks?.[0]) {
+                wsRef.current.send(
+                  JSON.stringify({
+                    landmarks: results.multiFaceLandmarks[0],
+                    width: 480,
+                    height: 320,
+                  })
+                );
+              } else {
+                wsRef.current.send(JSON.stringify({ no_face: true }));
+              }
+              return;
             }
+
+            // Local browser head-pose & EAR fallback (for Vercel standalone deployment)
+            const lms = results.multiFaceLandmarks?.[0];
+            const nowSec = performance.now() / 1000;
+            if (!lms) {
+              if (!faceMeshRef.current._noFaceSince) faceMeshRef.current._noFaceSince = nowSec;
+              const awaySec = nowSec - faceMeshRef.current._noFaceSince;
+              const distracted = awaySec > 2.2;
+              applyTelemetry({
+                status: distracted ? "Distracted" : "Attentive",
+                is_distracted: distracted,
+                reason: distracted ? "Face not visible / stepped away" : "",
+                metrics: { yaw_deg: 35, pitch_deg: 0, ear: 0, eyes_closed_duration_sec: 0 },
+              });
+              return;
+            }
+            faceMeshRef.current._noFaceSince = null;
+
+            const dist = (a, b) => Math.hypot((a.x - b.x) * 480, (a.y - b.y) * 320);
+            const leftEar =
+              (dist(lms[160], lms[144]) + dist(lms[158], lms[153])) /
+              Math.max(1e-4, 2 * dist(lms[33], lms[133]));
+            const rightEar =
+              (dist(lms[385], lms[380]) + dist(lms[387], lms[373])) /
+              Math.max(1e-4, 2 * dist(lms[362], lms[263]));
+            const ear = Number(((leftEar + rightEar) / 2).toFixed(3));
+
+            const eyeMidX = (lms[33].x + lms[263].x) / 2;
+            const eyeSpan = Math.max(0.05, Math.abs(lms[263].x - lms[33].x));
+            const yaw_deg = Number((((lms[1].x - eyeMidX) / (eyeSpan * 0.5)) * 42).toFixed(1));
+
+            const faceH = Math.max(0.08, Math.abs(lms[152].y - lms[10].y));
+            const pitch_deg = Number(((((lms[1].y - lms[10].y) / faceH) - 0.56) * 85).toFixed(1));
+
+            if (ear < 0.2) {
+              if (!faceMeshRef.current._eyesClosedSince) faceMeshRef.current._eyesClosedSince = nowSec;
+            } else {
+              faceMeshRef.current._eyesClosedSince = null;
+            }
+            const closedSec = faceMeshRef.current._eyesClosedSince
+              ? Number((nowSec - faceMeshRef.current._eyesClosedSince).toFixed(1))
+              : 0;
+
+            const lookingAway = Math.abs(yaw_deg) > 25 || Math.abs(pitch_deg) > 26;
+            const drowsy = closedSec >= 2.5;
+            const distracted = lookingAway || drowsy;
+            const reason = drowsy
+              ? "Eyes closed / drowsy"
+              : lookingAway
+              ? "Looking away from screen"
+              : "Attentive and engaged";
+
+            applyTelemetry({
+              status: distracted ? "Distracted" : "Attentive",
+              is_distracted: distracted,
+              reason,
+              metrics: { yaw_deg, pitch_deg, ear, eyes_closed_duration_sec: closedSec },
+            });
           });
           faceMeshRef.current = fm;
         }
@@ -289,6 +353,10 @@ export default function BackgroundAttentionMonitor({
     };
   }, [stopCamera]);
 
+  useEffect(() => {
+    onCameraStatusChange?.(cameraActive);
+  }, [cameraActive, onCameraStatusChange]);
+
   const toggleCamera = (e) => {
     e?.stopPropagation();
     if (cameraActive) {
@@ -309,7 +377,7 @@ export default function BackgroundAttentionMonitor({
         type="button"
         className={`awareness-trigger-btn ${open ? "open" : ""} ${cameraActive ? "cam-on" : ""} ${isDistracted ? "distracted" : ""}`}
         onClick={() => setOpen((v) => !v)}
-        title="Click to open Awareness Checker & Eye Contact camera"
+        title="Click to open Camera & Awareness Eye Contact"
       >
         <span className={`awareness-trigger-dot ${cameraActive ? (isDistracted ? "danger" : "live") : "idle"}`} />
         <svg
@@ -324,7 +392,7 @@ export default function BackgroundAttentionMonitor({
           <path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7Z" />
           <circle cx="12" cy="12" r="3" />
         </svg>
-        <span>Awareness</span>
+        <span>Camera</span>
         <span className="awareness-trigger-score">{focusScore}%</span>
       </button>
 
@@ -348,7 +416,7 @@ export default function BackgroundAttentionMonitor({
               <path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7Z" />
               <circle cx="12" cy="12" r="3" />
             </svg>
-            <h3 className="awareness-title">Awareness Checker &amp; Eye Contact</h3>
+            <h3 className="awareness-title">Camera &amp; Eye Contact</h3>
           </div>
 
           <button

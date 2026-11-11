@@ -56,39 +56,13 @@ async def _deferred_seed():
     await asyncio.sleep(3)
     try:
         await asyncio.to_thread(lambda: rag_engine.embeddings)
-        docs = await asyncio.to_thread(db.list_documents)
-        if not docs:
-            sample_pdf = Path(settings.upload_dir) / "sample_calculus.pdf"
-            if sample_pdf.exists():
-                log.info("Auto-indexing sample calculus textbook into ChromaDB...")
-                doc_id = "doc_" + uuid.uuid4().hex[:12]
-                res = await asyncio.to_thread(
-                    rag_engine.ingest_document,
-                    doc_id=doc_id,
-                    file_path_or_bytes=str(sample_pdf),
-                    filename="sample_calculus.pdf",
-                    collection_name="calculus_101",
-                )
-                await asyncio.to_thread(
-                    db.create_document,
-                    doc_id=doc_id,
-                    filename="sample_calculus.pdf",
-                    original_name="Sample Calculus 101.pdf",
-                    collection="calculus_101",
-                    title="Calculus 101: Limits & Derivatives",
-                    file_size=sample_pdf.stat().st_size,
-                    pages_count=res["pages_extracted"],
-                    chunks_count=res["chunks_created"],
-                    custom_notes="Introductory calculus notes covering limits, continuity, and basic differentiation rules.",
-                )
-                log.info("Sample textbook indexed successfully.")
     except Exception as e:
-        log.warning("Could not auto-seed sample document: %s", e)
+        log.warning("Could not pre-warm embeddings: %s", e)
 
 
 @app.on_event("startup")
 async def seed_sample_docs():
-    """Schedules background embedding warm-up and sample PDF seeding without blocking port binding."""
+    """Schedules background embedding warm-up without blocking port binding."""
     asyncio.create_task(_deferred_seed())
 
 
@@ -115,7 +89,7 @@ async def get_config():
         "attention_port": settings.attention_port,
         "personas": list(PERSONAS.keys()),
         "collections": collections,
-        "default_collection": "calculus_101",
+        "default_collection": "general",
         "avatar": {
             "url": settings.avatar_url,
             "body": settings.avatar_body,

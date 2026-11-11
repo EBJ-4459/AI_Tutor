@@ -23,7 +23,7 @@ export default function DocumentManager({
   onNotification,
 }) {
   const [documents, setDocuments] = useState([]);
-  const [localCollections, setLocalCollections] = useState(["calculus_101"]);
+  const [localCollections, setLocalCollections] = useState([]);
   const collections = propCollections && propCollections.length ? propCollections : localCollections;
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -43,7 +43,7 @@ export default function DocumentManager({
   // Upload inputs
   const [selectedFile, setSelectedFile] = useState(null);
   const [targetCollection, setTargetCollection] = useState(
-    activeCollection && activeCollection !== "all" ? activeCollection : "calculus_101"
+    activeCollection && activeCollection !== "all" ? activeCollection : (collections[0] || "")
   );
   const [isNewSubject, setIsNewSubject] = useState(false);
   const [newSubjectName, setNewSubjectName] = useState("");
@@ -237,7 +237,7 @@ export default function DocumentManager({
               <div>
                 <label className="input-label">Subject</label>
                 <select
-                  value={isNewSubject ? "__new__" : (collections.includes(targetCollection) ? targetCollection : (collections[0] || "calculus_101"))}
+                  value={isNewSubject ? "__new__" : (collections.includes(targetCollection) ? targetCollection : (collections[0] || "general"))}
                   onChange={(e) => {
                     if (e.target.value === "__new__") {
                       setIsNewSubject(true);
@@ -273,21 +273,10 @@ export default function DocumentManager({
                   type="text"
                   value={customTitle}
                   onChange={(e) => setCustomTitle(e.target.value)}
-                  placeholder="e.g. Calculus Derivatives Notes"
+                  placeholder="e.g. Course Chapter 1"
                   className="text-input"
                 />
               </div>
-            </div>
-
-            <div>
-              <label className="input-label">Notes / Instructions for AI Tutor (Optional)</label>
-              <textarea
-                value={customNotes}
-                onChange={(e) => setCustomNotes(e.target.value)}
-                placeholder="Key concepts or focus areas..."
-                rows={1}
-                className="text-input notes-input"
-              />
             </div>
 
             <button
@@ -303,7 +292,7 @@ export default function DocumentManager({
         {/* Document Cards List */}
         <div className="doc-list-section">
           <div className="section-head">
-            <h3>Indexed Documents</h3>
+            <h3>Document</h3>
             <button className="btn ghost small" onClick={fetchDocuments} title="Refresh list">↻ Refresh</button>
           </div>
 

@@ -7,7 +7,14 @@ import BackgroundAttentionMonitor from "./components/BackgroundAttentionMonitor.
 import Sidebar from "./components/Sidebar.jsx";
 import { useChatSocket } from "./hooks/useChatSocket.js";
 import { useVoiceInput } from "./hooks/useVoiceInput.js";
-import { api, getToken, setToken } from "./lib/api.js";
+import {
+  api,
+  DEFAULT_CONFIG,
+  askStandaloneTutor,
+  appendLocalMessage,
+  getToken,
+  setToken,
+} from "./lib/api.js";
 
 const STOP_WORDS = /^(stop|wait|pause|cancel|quiet|enough)\W*$/i;
 const wordCount = (t) => t.trim().split(/\s+/).filter(Boolean).length;
@@ -15,7 +22,7 @@ let keySeq = 0;
 const nextKey = (p) => `${p}-${Date.now()}-${keySeq++}`;
 
 export default function App() {
-  const [config, setConfig] = useState(null);
+  const [config, setConfig] = useState(DEFAULT_CONFIG);
   const [needsToken, setNeedsToken] = useState(false);
   const [authTick, setAuthTick] = useState(0);
   const [sessions, setSessions] = useState([]);
@@ -29,8 +36,8 @@ export default function App() {
   const [toast, setToast] = useState("");
 
   // Active textbook collection state & available collections list
-  const [activeCollection, setActiveCollection] = useState("calculus_101");
-  const [collections, setCollections] = useState(["calculus_101"]);
+  const [activeCollection, setActiveCollection] = useState("all");
+  const [collections, setCollections] = useState([]);
 
   const refreshCollections = useCallback(() => {
     api
@@ -53,6 +60,7 @@ export default function App() {
 
   // Distraction Intervention state
   const [intervention, setIntervention] = useState(null);
+  const [cameraActive, setCameraActive] = useState(false);
 
   // Mobile partition view tab ("avatar" | "chat" | "docs")
   const [activeTab, setActiveTab] = useState("chat");
@@ -99,7 +107,6 @@ export default function App() {
     api.config()
       .then((cfg) => {
         setConfig(cfg);
-        if (cfg.default_collection) setActiveCollection(cfg.default_collection);
         refreshCollections();
       })
       .catch(() => showToast("Cannot reach server. Is the backend running on port 8000?"));
@@ -253,22 +260,73 @@ export default function App() {
 
   // ---------------------------------------------------------------- Send message
   const sendMessage = useCallback(
-    (text) => {
+    async (text) => {
       avatarRef.current?.unlock();
       if (busyRef.current) interruptLocal();
+      setMessages((ms) => [...ms, { key: nextKey("u"), role: "user", content: text }]);
+
       if (
-        !send({
+        send({
           type: "user_message",
           text,
           collection: activeCollection,
         })
       ) {
-        showToast("Not connected yet. Reconnecting…");
         return;
       }
-      setMessages((ms) => [...ms, { key: nextKey("u"), role: "user", content: text }]);
+
+      // Standalone / Vercel Fallback when WebSocket backend is not connected
+      appendLocalMessage(sessionId, "user", text);
+      const turnId = `local-${Date.now()}`;
+      activeTurnRef.current = turnId;
+      setGenerating(true);
+      setMessages((ms) => [
+        ...ms,
+        {
+          key: `a-${turnId}`,
+          role: "assistant",
+          content: "",
+          streaming: true,
+          turn: turnId,
+          sources: [],
+        },
+      ]);
+
+      try {
+        const res = await askStandaloneTutor({
+          query: text,
+          history: messages,
+          collection: activeCollection,
+        });
+        if (activeTurnRef.current !== turnId) return;
+        const replyText = res.reply || "I'm here to help with your study questions!";
+        const sources = res.sources || [];
+        activeTurnRef.current = null;
+        setGenerating(false);
+        setMessages((ms) =>
+          ms.map((m) =>
+            m.turn === turnId
+              ? { ...m, content: replyText, streaming: false, sources }
+              : m
+          )
+        );
+        appendLocalMessage(sessionId, "assistant", replyText, sources);
+        refreshSessions();
+        avatarRef.current?.speakLocal?.(replyText, "happy");
+      } catch (err) {
+        if (activeTurnRef.current !== turnId) return;
+        activeTurnRef.current = null;
+        setGenerating(false);
+        setMessages((ms) =>
+          ms.map((m) =>
+            m.turn === turnId
+              ? { ...m, streaming: false, error: err?.message || "Could not generate response" }
+              : m
+          )
+        );
+      }
     },
-    [send, interruptLocal, activeCollection, showToast]
+    [send, interruptLocal, activeCollection, sessionId, messages, refreshSessions]
   );
 
   const stopAvatar = useCallback(() => {
@@ -356,14 +414,23 @@ export default function App() {
       lastNudgeAtRef.current = now;
       avatarRef.current?.unlock();
       avatarRef.current?.setListening(true);
+      const nudgeText =
+        "Hey, I noticed you got distracted! Pay attention here, let's stay focused on our lesson!";
       setIntervention({
-        message: "Hey, I noticed you got distracted! Pay attention here, let's stay focused on our lesson!",
+        message: nudgeText,
       });
-      send({
+      const sentOverWs = send({
         type: "distraction_nudge",
         reason: data?.reason || "getting distracted",
         collection: activeCollection,
       });
+      if (!sentOverWs) {
+        setMessages((ms) => [
+          ...ms,
+          { key: nextKey("a"), role: "assistant", content: nudgeText, sources: [] },
+        ]);
+        avatarRef.current?.speakLocal?.(nudgeText, "happy");
+      }
     },
     [send, activeCollection]
   );
@@ -405,10 +472,11 @@ export default function App() {
 
           {/* Awareness Popover & Theme Toggle */}
           <div className="topbar-status-group">
-            {/* Expandable Awareness Checker near Light Mode */}
+            {/* Expandable Camera & Awareness Checker near Light Mode */}
             <BackgroundAttentionMonitor
               enabled={true}
               onDistractionDetected={handleDistractionDetected}
+              onCameraStatusChange={setCameraActive}
             />
 
             <button
@@ -487,14 +555,24 @@ export default function App() {
 
                 {toast && <div className="toast" role="alert">{toast}</div>}
 
+                {!cameraActive && (
+                  <div className="camera-lock-banner" role="alert">
+                    <span className="camera-lock-icon">📷</span>
+                    <div className="camera-lock-text">
+                      <strong>Camera Required:</strong> Please turn on the <strong>Camera</strong> in the top-right header to activate your 3D tutor and continue lessons.
+                    </div>
+                  </div>
+                )}
+
                 <Composer
-                  disabled={status !== "open" || loadingMsgs}
+                  disabled={!cameraActive || loadingMsgs}
                   busy={generating || speaking}
                   voice={voice}
+                  placeholder={!cameraActive ? "Turn on Camera above to unlock chat..." : undefined}
                   maxChars={config?.max_message_chars}
                   onSend={sendMessage}
                   onStop={stopAvatar}
-                  onMicToggle={toggleMic}
+                  onMicToggle={cameraActive ? toggleMic : () => showToast("Please turn on your camera first to speak with Aria.")}
                   bargeIn={bargeIn}
                   onBargeInChange={setBargeIn}
                 />

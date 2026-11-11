@@ -244,7 +244,4 @@ class Database:
             rows = self._conn.execute(
                 "SELECT DISTINCT collection FROM documents ORDER BY collection ASC"
             ).fetchall()
-        colls = [r["collection"] for r in rows if r["collection"]]
-        if "calculus_101" not in colls:
-            colls.insert(0, "calculus_101")
-        return colls
+        return [r["collection"] for r in rows if r["collection"]]

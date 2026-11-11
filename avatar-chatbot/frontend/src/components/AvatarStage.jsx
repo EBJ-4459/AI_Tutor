@@ -37,8 +37,8 @@ const AvatarStage = forwardRef(function AvatarStage({ avatar, onSpeakingChange, 
           ttsEndpoint: null,
           lipsyncModules: ["en", "fi", "de", "fr", "lt"],
           cameraView: "upper",
-          cameraRotateEnable: true,
-          cameraZoomEnable: true,
+          cameraRotateEnable: false,
+          cameraZoomEnable: false,
           cameraPanEnable: false,
           avatarMood: "neutral",
         });
@@ -123,12 +123,96 @@ const AvatarStage = forwardRef(function AvatarStage({ avatar, onSpeakingChange, 
       epochRef.current += 1;
       queueEndRef.current = 0;
       chainRef.current = Promise.resolve();
+      try {
+        window.speechSynthesis?.cancel();
+      } catch {
+        /* ignore */
+      }
       const head = headRef.current;
       try {
         head?.stopSpeaking?.();
         head?.setMood?.("neutral");
       } catch (e) {
         console.warn("stopSpeaking failed", e);
+      }
+    },
+
+    speakLocal(text, mood = "happy") {
+      const clean = (text || "")
+        .replace(/\[[a-z]+\]/gi, "")
+        .replace(/[*#`_~>]/g, "")
+        .replace(/\s+/g, " ")
+        .trim();
+      if (!clean) return;
+
+      const epoch = epochRef.current;
+      const head = headRef.current;
+      const words = clean.split(/\s+/).filter(Boolean);
+      const wordDurMs = 310;
+      const totalDurSec = Math.max(1.2, (words.length * wordDurMs) / 1000);
+      const now = Date.now();
+      queueEndRef.current = now + totalDurSec * 1000 + 300;
+
+      // Drive 3D lip-sync visemes on TalkingHead using a silent AudioBuffer + word timings
+      if (head && head.audioCtx) {
+        (async () => {
+          try {
+            const ctx = head.audioCtx;
+            if (ctx.state === "suspended") await ctx.resume();
+            if (epoch !== epochRef.current) return;
+            const sampleRate = ctx.sampleRate || 22050;
+            const frameCount = Math.max(1, Math.ceil(sampleRate * totalDurSec));
+            const silentBuffer = ctx.createBuffer(1, frameCount, sampleRate);
+            const wtimes = words.map((_, idx) => idx * wordDurMs);
+            const wdurations = words.map(() => wordDurMs - 30);
+            if (mood) {
+              try {
+                head.setMood?.(mood);
+              } catch {
+                /* ignore */
+              }
+            }
+            head.speakAudio(
+              { audio: silentBuffer, words, wtimes, wdurations },
+              {}
+            );
+          } catch (err) {
+            console.warn("Local avatar viseme animation error:", err);
+          }
+        })();
+      }
+
+      // Speak aloud using Web Speech API
+      if (typeof window !== "undefined" && "speechSynthesis" in window) {
+        try {
+          window.speechSynthesis.cancel();
+          const utter = new SpeechSynthesisUtterance(clean);
+          utter.rate = 1.02;
+          utter.pitch = 1.05;
+          const voices = window.speechSynthesis.getVoices?.() || [];
+          const preferred =
+            voices.find((v) => /aria|jenny|zira|samantha|google us english|natural|female/i.test(v.name) && /en/i.test(v.lang)) ||
+            voices.find((v) => /en/i.test(v.lang));
+          if (preferred) utter.voice = preferred;
+          utter.onend = () => {
+            if (epoch === epochRef.current) {
+              queueEndRef.current = Date.now();
+              try {
+                headRef.current?.stopSpeaking?.();
+              } catch {
+                /* ignore */
+              }
+            }
+          };
+          utter.onerror = () => {
+            if (epoch === epochRef.current) {
+              queueEndRef.current = Date.now();
+            }
+          };
+          window.speechSynthesis.speak(utter);
+        } catch (err) {
+          console.warn("SpeechSynthesis failed:", err);
+        }
       }
     },
 
@@ -175,24 +259,13 @@ const AvatarStage = forwardRef(function AvatarStage({ avatar, onSpeakingChange, 
 
   return (
     <div className="avatar-stage">
-      <div ref={hostRef} className="avatar-canvas" />
+      <div ref={hostRef} className="avatar-canvas" style={{ pointerEvents: "none" }} />
 
       {/* Camera View Controls */}
       <div className="avatar-controls-top">
         <div className="avatar-title-badge">
           <span className="dot pulse" />
           <span>{assistantName} (3D Avatar)</span>
-        </div>
-        <div className="view-switch-group">
-          {["head", "upper", "full"].map((v) => (
-            <button
-              key={v}
-              className={`view-btn ${currentView === v ? "active" : ""}`}
-              onClick={() => changeView(v)}
-            >
-              {v.charAt(0).toUpperCase() + v.slice(1)}
-            </button>
-          ))}
         </div>
       </div>
 

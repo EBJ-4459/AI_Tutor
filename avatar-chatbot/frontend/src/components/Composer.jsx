@@ -12,6 +12,7 @@ export default function Composer({
   busy,
   voice,
   maxChars,
+  placeholder,
   onSend,
   onStop,
   onMicToggle,
@@ -81,7 +82,9 @@ export default function Composer({
             value={text}
             rows={1}
             maxLength={maxChars || 2000}
-            placeholder={voice.listening ? "Listening… speak naturally" : "Ask a textbook question or talk..."}
+            placeholder={
+              placeholder || (voice.listening ? "Listening… speak naturally" : "Ask a textbook question or talk...")
+            }
             onChange={(e) => setText(e.target.value)}
             onKeyDown={onKeyDown}
             disabled={disabled}
